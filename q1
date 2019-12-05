@@ -1,0 +1,75 @@
+class MyController extends Controller
+{
+  public function campaigns(Request $request)
+  {
+    $camp_users = CampaignUser::where('user', '=', Auth::user()->id)->get();
+    $camps = [];
+    foreach ($camp_users as $cu) {
+      $campaign = Campaign::find($cu->campaign);
+      $campaign->lessons = CampaignLesson::where([['campaign', '=', $campaign->id]])->get();
+      $remaining = count($campaign->lessons);
+      $campaign->quizes = 0;
+      foreach ($campaign->lessons as $lesson) {
+        $lesson->lesson = Lesson::find($lesson->lesson);
+        $language = Auth::user()->language;
+        if ($language == 2) {
+          $text_lesson_title = Text::where('item_id', $lesson->lesson->id)->where('shortcode', 'title')->get()->first();
+          if ($text_lesson_title != NULL) {
+            $lesson->lesson->title = $text_lesson_title->long_text;
+          }
+          $text_lesson_description = Text::where('item_id', $lesson->lesson->id)->where('shortcode', 'desc')->get()->first();
+          if ($text_lesson_description != NULL) {
+            $lesson->description = $text_lesson_description->long_text;
+          }
+        }
+        $lesson->status = 'unwatched';
+        $lesson->result = '??';
+        if ($lesson->questions) {
+          $campaign->quizes += 1;
+        }
+        $watched = WatchedLesson::where([['campaign', '=', $campaign->id], ['lesson', '=', $lesson->lesson->id], ['user', '=', Auth::user()->id]])->get();
+        if (count($watched) > 0) {
+          $lesson->status = 'watched';
+          $lesson->watched = $watched;
+          if ($lesson->questions) {
+            $quiz = UserQuiz::where([['user', '=', Auth::user()->id], ['campaign', '=', $campaign->id], ['lesson', '=', $lesson->lesson->id]])->get();
+            if (count($quiz) > 0) {
+              $lesson->quiz = $quiz->first();
+              $lesson->quiz->passed = $lesson->quiz->result >= (isset($campaign->success_percent) && $campaign->success_percent > 0 ? $campaign->success_percent : 100);
+              $lesson->status = $lesson->quiz->passed ? "completed" : "failed";
+              $lesson->completedQuiz = $lesson->quiz->passed ? "completed" : "failed";
+              $lesson->result = $lesson->quiz->passed ? $lesson->quiz->result . '%' : "Try Again";
+              $campaign->quizes -= 1;
+              $remaining -= 1;
+            }
+          } else {
+            $lesson->status = 'completed';
+            $lesson->result = '100%';
+            $remaining -= 1;
+          }
+        }
+      }
+      $campaign->completed = count($campaign->lessons) - $remaining;
+      $now = Carbon::now();
+      $campaign->passed_due = isset($campaign->due_date) && $campaign->due_date != null && $now->gt($campaign->due_date);
+      if ($campaign->passed_due) {
+        $campaign->remaining = 0;
+        $campaign->missed = $remaining;
+      } else {
+        $campaign->remaining = $remaining;
+        $campaign->missed = 0;
+      }
+      if (isset($campaign->exam) && $campaign->exam > 0) {
+        $campaign->exam = Exam::find($campaign->exam);
+        $campaign->user_exam = UserExam::where([['campaign', '=', $campaign->id], ['exam', '=', $campaign->exam->id], ['user', '=', Auth::user()->id]])->get();
+        if (count($campaign->user_exam) > 0) {
+          $campaign->user_exam = $campaign->user_exam->first();
+        } else {
+          $campaign->user_exam = null;
+        }
+      }
+      array_push($camps, $campaign);
+    }
+    return response()->json($camps);
+  }
+}
